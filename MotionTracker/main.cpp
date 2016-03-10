@@ -1,3 +1,4 @@
+#include <opencv2/opencv.hpp>
 #include "opencv2/highgui/highgui.hpp"
 #include "opencv2/video/video.hpp"
 #include <windows.h>
@@ -10,79 +11,79 @@ using namespace cv;
 Mat staticimg;
 
 void GetStatic(String);
-void MotionTracker(String, String);
+void MotionTracker(String, String, String);
 
 
 /**
-* Start of the program where we start by defining a global variable that defines a static image.
-* We also define our paths and call our two main functions that are then responsible of detecting
+* We define our paths and call our two main functions that are then responsible of detecting
 * and tracking the objects. To make this program work with other files we just need to change the
 * values of insert and output.
 *
-* @param argc N/A
-* @param argv N/A
 */
-int main(int argc, const char** argv)
+int main()
 {
 	staticimg = 0;
-	String insert = "C:/funny.avi";
-	String output = "C:/funny_output.avi";
+	String insert = "C:/walk_short.avi";			// Path to video that needs to be detected
+	String output = "C:/walk__short_output.avi";	// Path to where detected video to be saved - Background Subtractor
+	String output2 = "C:/walk_short_output2.avi";	// Path to where detected video to be saved - Absolute Difference
 
-	GetStatic(insert);
-	Sleep(2000);
-	MotionTracker(insert, output);
+	//GetStatic(insert);
+	MotionTracker(insert, output, output2);
 	return 0;
 }
 
 /**
-* GetStatic is responsible of blending a video frame by frame until the end. It then creates an image
+* GetStatic is responsible of eroding a video frame by frame until the end. It then creates an image
 * based on the results. Any object that has been moving will slowly diappear while static objects will
 * remain in the picture. The image will later on be used to detect moving objects.
 *
 * @param insert Path to a valid video that needs to be detected.
 */
-void GetStatic(String insert){
+void GetStatic(String insert) {
 
+	Mat window, main, NoObject, detail;
 	VideoCapture capSrc(insert);
-	Mat inputframe, blendframe;
-	double alpha = 0.01;
-	double beta = 1 - alpha;
+	capSrc.read(window);
 
-	namedWindow("Original", CV_WINDOW_AUTOSIZE);
-	namedWindow("Difference", CV_WINDOW_AUTOSIZE);
+	BackgroundSubtractorMOG2 bg = BackgroundSubtractorMOG2();
+	bg.set("history", 50);						// Sets the number of last frames that affect the background model
+	bg.set("nmixtures", 3);						// Sets the number of gaussian components in the background model
+	bg.set("backgroundRatio", 0.7);				// Sets the "background ratio" parameter of the algorithm
+	bg.set("detectShadows", false);				// Enables or disables shadow detection
 
-	capSrc.read(blendframe);
-	while (capSrc.read(inputframe)) {
-		addWeighted(inputframe, alpha, blendframe, beta, 0.0, blendframe);
-		staticimg = blendframe;
+	while (capSrc.read(main)) {
+		Mat diff, result;
 
-		imshow("Original", inputframe);
-		imshow("Difference", blendframe);
+		bg.operator()(main, detail);
+		bg.getBackgroundImage(NoObject);
+		erode(detail, detail, Mat());
+
+		imshow("No Object", NoObject);
+		imshow("Original", main);
 		waitKey(1);
 	}
 
-	imwrite("C:/static.png", staticimg);
-	capSrc.release();
 	Sleep(2000);
+	imwrite("C:/NoObjects.png", NoObject);
+	capSrc.release();
 	destroyAllWindows();
 }
 
 
 /**
 * We will once again will go through our video frame by frame to find and detect the moving 
-* objects. Here we will use our staticimg and find its difference from the current
+* objects. Here we will use our eroded image and find its difference from the current
 * frame which will give us the objects that are changing their positions using a 
-* BackgroundSubtractorMOG2 class. Another one is also created to use the erode function
-* which will help in elimating anything that is static. The results from these two classes
-* are then combined and we also get a picture that is the view without any of the moving objects.
+* BackgroundSubtractorMOG2 class. The result is a video that draws rectangles around objects
+* that were not found in the NoObject.png
 *
 * @param insert Path to a valid video that needs to be detected.
-* @param output Path to where the detection video should be saved.
+* @param output Path to where the detection video should be saved. Background Subtractor
+* @param output Path to where the detection video should be saved. Absolute Difference
 */
-void MotionTracker(String insert, String output){
+void MotionTracker(String insert, String output, String output2) {
 
-	Mat window, main, diff, NoObject, detail, detail2, dst;
-	vector<vector<Point>> contours;
+	Mat window, main, main2, diff, NoObject, detail, detail2, dst;
 
 	VideoCapture capSrc(insert);
 	double fps = capSrc.get(CV_CAP_PROP_FPS);
@@ -93,6 +94,7 @@ void MotionTracker(String insert, String output){
 	Size frameSize(static_cast<int>(dWidth), static_cast<int>(dHeight));
 
 	VideoWriter oVideoWriter(output, CV_FOURCC('P', 'I', 'M', '1'), fps, frameSize, true);
+	VideoWriter oVideoWriter2(output2, CV_FOURCC('P', 'I', 'M', '1'), fps, frameSize, true);
 
 	BackgroundSubtractorMOG2 bg = BackgroundSubtractorMOG2();
 	bg.set("history", 50);
@@ -106,20 +108,27 @@ void MotionTracker(String insert, String output){
 	bg2.set("backgroundRatio", 0.7);
 	bg2.set("detectShadows", false);
 
-	namedWindow("Main");
-	namedWindow("Detail");
-	namedWindow("Shape");
-	namedWindow("NoObject");
+	namedWindow("Background Subtractor");			// Original Video
+	namedWindow("Absolute Difference");				// Original Video 2
+	namedWindow("Detail");							// threshold of moving objects
+	namedWindow("Shape");							// blured threshold of moving objects
+	namedWindow("absdiff");							// absdiff of main frame and static image
 
-	while (capSrc.read(main)){
+	while (capSrc.read(main)) {
 		Mat diff, result;
+		main2 = main.clone();
 
-		if (staticimg.empty()){
-			staticimg = imread("C:/static.png", CV_LOAD_IMAGE_UNCHANGED);
+		if (staticimg.empty()) {
+			staticimg = imread("C:/NoObjects.png", CV_LOAD_IMAGE_UNCHANGED);
 		}
 
 		absdiff(main, staticimg, diff);
 		threshold(diff, result, 60, 255, CV_THRESH_BINARY);
+		Mat diff_original = diff.clone();
+		cvtColor(diff_original, diff_original, CV_BGR2GRAY);
+		threshold(diff_original, diff_original, 60, 255, CV_THRESH_BINARY);
+		blur(diff_original, diff_original, Size(10, 10));
+		imshow("absdiff", diff_original);
 
 		Mat total = result;
 		bg.operator()(total, detail);
@@ -131,34 +140,51 @@ void MotionTracker(String insert, String output){
 		erode(detail2, detail2, Mat());
 
 		dst = detail & detail2;
-		blur(dst, dst, Size(10, 10));
-		blur(dst, dst, Size(10, 10));
+		blur(dst, dst, Size(10, 10));			// bluring multiple times in different method gives
+		blur(dst, dst, Size(10, 10));			// better results
 		blur(dst, dst, Size(10, 10));
 		threshold(dst, dst, 20, 255, THRESH_BINARY);
 		imshow("Shape", dst);
 
+		vector<vector<Point>> contours;
 		findContours(dst, contours, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
 
 		vector<vector<Point> > contours_poly(contours.size());
 		vector<Rect> boundRect(contours.size());
-		for (int i = 0; i < contours.size(); i++){
+		for (int i = 0; i < contours.size(); i++) {
 			approxPolyDP(Mat(contours[i]), contours_poly[i], 3, true);
 			boundRect[i] = boundingRect(Mat(contours_poly[i]));
 		}
 
-		for (int i = 0; i< contours.size(); i++){
+		for (int i = 0; i< contours.size(); i++) {
 			Scalar color = Scalar(0, 255, 0);
 			drawContours(main, contours_poly, i, color, 1, 8, vector<Vec4i>(), 0, Point());
 			rectangle(main, boundRect[i].tl(), boundRect[i].br(), color, 2, 8, 0);
 		}
 
+		vector<vector<Point>> contours2;
+		findContours(diff_original, contours2, CV_RETR_EXTERNAL, CV_CHAIN_APPROX_NONE);
+
+		vector<vector<Point> > contours_poly2(contours2.size());
+		vector<Rect> boundRect2(contours2.size());
+		for (int i = 0; i < contours2.size(); i++) {
+			approxPolyDP(Mat(contours2[i]), contours_poly2[i], 3, true);
+			boundRect2[i] = boundingRect(Mat(contours_poly2[i]));
+		}
+
+		for (int i = 0; i< contours2.size(); i++) {
+			Scalar color = Scalar(0, 255, 0);
+			drawContours(main2, contours_poly2, i, color, 1, 8, vector<Vec4i>(), 0, Point());
+			rectangle(main2, boundRect2[i].tl(), boundRect2[i].br(), color, 2, 8, 0);
+		}
+
 		oVideoWriter.write(main);
-		imshow("Main", main);
-		imshow("NoObject", NoObject);
+		oVideoWriter2.write(main2);
+		imshow("Background Subtractor", main);
+		imshow("Absolute Difference", main2);
 		waitKey(1);
 	}
 
-	imwrite("C:/NoObjects.png", NoObject);
 	capSrc.release();
 	destroyAllWindows();
 }
